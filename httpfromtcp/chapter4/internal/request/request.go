@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+
+	"chapter5/headers"
 )
 
 type Request struct {
 	RequestLine RequestLine
+	Headers     *headers.Headers
 	state       parserState
 }
 
@@ -25,9 +28,10 @@ var SEPARATOR = []byte("\r\n")
 type parserState string
 
 const (
-	StateInit  parserState = "init"
-	StateDone  parserState = "done"
-	StateError parserState = "error"
+	StateInit    parserState = "init"
+	StateHeaders parserState = "headers"
+	StateDone    parserState = "done"
+	StateError   parserState = "error"
 )
 
 func (r *RequestLine) ValidHTTP() bool {
@@ -36,7 +40,8 @@ func (r *RequestLine) ValidHTTP() bool {
 
 func newRequest() *Request {
 	return &Request{
-		state: StateInit,
+		state:   StateInit,
+		Headers: headers.NewHeaders(),
 	}
 }
 
@@ -75,11 +80,12 @@ func (r *Request) parse(data []byte) (int, error) {
 
 outer:
 	for {
+		currentData := data[read:]
 		switch r.state {
 		case StateError:
 			return 0, ErrorRequestInErrorState
 		case StateInit:
-			rl, n, err := parseRequestLine(data[read:])
+			rl, n, err := parseRequestLine(currentData)
 			if err != nil {
 				return 0, err
 			}
@@ -90,10 +96,26 @@ outer:
 
 			r.RequestLine = *rl
 			read += n
-			r.state = StateDone
+			r.state = StateHeaders
+		case StateHeaders:
+			n, done, err := r.Headers.Parse(currentData)
+			if err != nil {
+				return 0, err
+			}
 
+			if n == 0 {
+				break outer
+			}
+
+			read += n
+
+			if done {
+				r.state = StateDone
+			}
 		case StateDone:
 			break outer
+		default:
+			panic("somehow we have programmed poorly")
 		}
 	}
 
@@ -118,7 +140,7 @@ func RequestFromReader(reader io.Reader) (*Request, error) {
 
 		bufLen += n
 
-		readN, err := request.parse(buf[:bufLen+n])
+		readN, err := request.parse(buf[:bufLen])
 		if err != nil {
 			return nil, err
 		}
